@@ -290,11 +290,9 @@ jobs:
             chmod +x "linux-portable/KiroTokenManager_${VERSION}_linux_x64/kiro-token-manager"
             
             # 创建启动脚本
-            cat > "linux-portable/KiroTokenManager_${VERSION}_linux_x64/run.sh" << 'EOF'
-#!/bin/bash
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-exec "$SCRIPT_DIR/kiro-token-manager" "$@"
-EOF
+            echo '#!/bin/bash' > "linux-portable/KiroTokenManager_${VERSION}_linux_x64/run.sh"
+            echo 'SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"' >> "linux-portable/KiroTokenManager_${VERSION}_linux_x64/run.sh"
+            echo 'exec "$SCRIPT_DIR/kiro-token-manager" "$@"' >> "linux-portable/KiroTokenManager_${VERSION}_linux_x64/run.sh"
             chmod +x "linux-portable/KiroTokenManager_${VERSION}_linux_x64/run.sh"
             
             # 打包为 tar.gz
