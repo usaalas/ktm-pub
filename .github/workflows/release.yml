@@ -95,8 +95,9 @@ jobs:
             sed -i.bak "s/^version = \".*\"/version = \"$CARGO_VERSION\"/" src-tauri/Cargo.toml
             rm -f src-tauri/Cargo.toml.bak
             
+            # tauri.conf.json 也需要 semver 格式
             if [ -f "src-tauri/tauri.conf.json" ]; then
-              sed -i.bak "s/\"version\": \".*\"/\"version\": \"$VERSION\"/" src-tauri/tauri.conf.json
+              sed -i.bak "s/\"version\": \".*\"/\"version\": \"$CARGO_VERSION\"/" src-tauri/tauri.conf.json
               rm -f src-tauri/tauri.conf.json.bak
             fi
             
@@ -254,12 +255,14 @@ jobs:
           fi
 
       # ========================================
-      # Linux: 加壳
+      # Linux: 加壳 + 通用二进制
       # ========================================
       - name: Binary packing (Linux)
         if: matrix.platform == 'ubuntu-22.04'
         run: |
           BINARY_PATH="src-tauri/target/${{ matrix.target }}/release/kiro-token-manager"
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          
           if [ -f "$BINARY_PATH" ]; then
             echo "=== Binary Hardening (Linux) ==="
             ORIGINAL_SIZE=$(stat -c%s "$BINARY_PATH")
@@ -280,6 +283,25 @@ jobs:
             PACKED_SIZE=$(stat -c%s "$BINARY_PATH")
             echo "Packed size: $PACKED_SIZE bytes"
             echo "=== Hardening Complete ==="
+            
+            # 创建通用 Linux 二进制包
+            mkdir -p "linux-portable/KiroTokenManager_${VERSION}_linux_x64"
+            cp "$BINARY_PATH" "linux-portable/KiroTokenManager_${VERSION}_linux_x64/kiro-token-manager"
+            chmod +x "linux-portable/KiroTokenManager_${VERSION}_linux_x64/kiro-token-manager"
+            
+            # 创建启动脚本
+            cat > "linux-portable/KiroTokenManager_${VERSION}_linux_x64/run.sh" << 'EOF'
+#!/bin/bash
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+exec "$SCRIPT_DIR/kiro-token-manager" "$@"
+EOF
+            chmod +x "linux-portable/KiroTokenManager_${VERSION}_linux_x64/run.sh"
+            
+            # 打包为 tar.gz
+            cd linux-portable
+            tar -czvf "KiroTokenManager_${VERSION}_linux_x64.tar.gz" "KiroTokenManager_${VERSION}_linux_x64"
+            cd ..
+            echo "✓ Linux portable tar.gz created"
           fi
 
       # ========================================
@@ -320,13 +342,17 @@ jobs:
             done
           fi
           
-          # Linux - DEB 和 RPM
+          # Linux - DEB、RPM 和通用二进制
           if [ "${{ matrix.platform }}" = "ubuntu-22.04" ]; then
             for f in src-tauri/target/${TARGET}/release/bundle/deb/*.deb; do
               [ -f "$f" ] && cp "$f" "release/KiroTokenManager_${VERSION}_${ARCH}.deb"
             done
             for f in src-tauri/target/${TARGET}/release/bundle/rpm/*.rpm; do
               [ -f "$f" ] && cp "$f" "release/KiroTokenManager_${VERSION}_x86_64.rpm"
+            done
+            # 通用 Linux 二进制
+            for f in linux-portable/*.tar.gz; do
+              [ -f "$f" ] && cp "$f" "release/"
             done
           fi
           
