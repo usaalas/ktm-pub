@@ -52,10 +52,37 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Get version
+      - name: Get version from tag or package.json
         id: version
         shell: bash
-        run: echo "VERSION=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            # 从 tag 获取版本号（去掉 v 前缀）
+            VERSION="${{ github.ref_name }}"
+            VERSION="${VERSION#v}"
+            echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+            echo "Using tag version: $VERSION"
+            
+            # 更新 package.json
+            npm pkg set version="$VERSION"
+            
+            # 更新 src-tauri/Cargo.toml
+            sed -i.bak "s/^version = \".*\"/version = \"$VERSION\"/" src-tauri/Cargo.toml
+            rm -f src-tauri/Cargo.toml.bak
+            
+            # 更新 src-tauri/tauri.conf.json
+            if [ -f "src-tauri/tauri.conf.json" ]; then
+              sed -i.bak "s/\"version\": \".*\"/\"version\": \"$VERSION\"/" src-tauri/tauri.conf.json
+              rm -f src-tauri/tauri.conf.json.bak
+            fi
+            
+            echo "✓ Version updated to $VERSION"
+          else
+            # 没有 tag 时使用 package.json 的版本
+            VERSION=$(node -p "require('./package.json').version")
+            echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+            echo "Using package.json version: $VERSION"
+          fi
 
       - name: Build frontend
         run: npm run build
