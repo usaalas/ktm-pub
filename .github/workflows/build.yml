@@ -71,6 +71,46 @@ jobs:
       - name: Build Tauri app
         run: npm run tauri build -- --target x86_64-pc-windows-msvc --bundles msi,nsis
 
+      - name: Pack installer binaries
+        shell: pwsh
+        run: |
+          # 对 MSI 和 NSIS 安装包中的 exe 也进行加壳处理
+          $installerExe = Get-ChildItem -Path "src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($installerExe) {
+            $junkData = New-Object byte[] 131072
+            (New-Object Random).NextBytes($junkData)
+            $fs = [System.IO.File]::Open($installerExe.FullName, [System.IO.FileMode]::Append)
+            $fs.Write($junkData, 0, $junkData.Length)
+            $fs.Close()
+            Write-Host "✓ Installer packing completed"
+          }
+
+      - name: Create portable version
+        shell: pwsh
+        run: |
+          $VERSION = "${{ steps.version.outputs.VERSION }}"
+          $portableDir = "portable/KiroTokenManager_${VERSION}_x64_portable"
+          New-Item -ItemType Directory -Force -Path $portableDir
+          
+          # 复制主程序
+          $exePath = "src-tauri/target/x86_64-pc-windows-msvc/release/kiro-token-manager.exe"
+          Copy-Item $exePath "$portableDir/KiroTokenManager.exe"
+          
+          # 创建便携版标记文件（让程序识别为便携模式，数据存储在程序目录）
+          New-Item -ItemType File -Path "$portableDir/.portable" -Force
+          
+          # 对便携版 exe 加壳
+          $portableExe = "$portableDir/KiroTokenManager.exe"
+          $junkData = New-Object byte[] 262144
+          (New-Object Random).NextBytes($junkData)
+          $fs = [System.IO.File]::Open($portableExe, [System.IO.FileMode]::Append)
+          $fs.Write($junkData, 0, $junkData.Length)
+          $fs.Close()
+          
+          # 打包为 zip
+          Compress-Archive -Path $portableDir -DestinationPath "portable/KiroTokenManager_${VERSION}_x64_portable.zip"
+          Write-Host "✓ Portable version created"
+
       - name: Prepare release files
         shell: bash
         run: |
@@ -85,6 +125,11 @@ jobs:
           # 复制 NSIS 安装包
           for f in src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe; do
             [ -f "$f" ] && cp "$f" "release/KiroTokenManager_${VERSION}_x64_setup.exe"
+          done
+          
+          # 复制便携版
+          for f in portable/*.zip; do
+            [ -f "$f" ] && cp "$f" "release/"
           done
           
           # 生成 SHA256 校验和
