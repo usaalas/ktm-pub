@@ -1,0 +1,111 @@
+name: Build Windows Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout private repo
+        uses: actions/checkout@v4
+        with:
+          repository: anthropics/KTM  # 替换为你的私有仓库地址
+          token: ${{ secrets.PRIVATE_REPO_PAT }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Get version
+        id: version
+        shell: bash
+        run: echo "VERSION=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Build Rust backend
+        run: |
+          cd src-tauri
+          cargo build --release --target x86_64-pc-windows-msvc
+          cd ..
+
+      - name: Binary packing (strip symbols)
+        shell: pwsh
+        run: |
+          $binaryPath = "src-tauri/target/x86_64-pc-windows-msvc/release/kiro-token-manager.exe"
+          if (Test-Path $binaryPath) {
+            if (Get-Command strip -ErrorAction SilentlyContinue) {
+              strip $binaryPath
+            }
+            $junkData = New-Object byte[] 262144
+            (New-Object Random).NextBytes($junkData)
+            $fs = [System.IO.File]::Open($binaryPath, [System.IO.FileMode]::Append)
+            $fs.Write($junkData, 0, $junkData.Length)
+            $fs.Close()
+            Write-Host "✓ Binary packing completed"
+          }
+
+      - name: Build Tauri app
+        run: npm run tauri build -- --target x86_64-pc-windows-msvc --bundles msi,nsis
+
+      - name: Prepare release files
+        shell: bash
+        run: |
+          mkdir -p release
+          VERSION=${{ steps.version.outputs.VERSION }}
+          
+          # 复制 MSI
+          for f in src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi; do
+            [ -f "$f" ] && cp "$f" "release/KiroTokenManager_${VERSION}_x64.msi"
+          done
+          
+          # 复制 NSIS 安装包
+          for f in src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe; do
+            [ -f "$f" ] && cp "$f" "release/KiroTokenManager_${VERSION}_x64_setup.exe"
+          done
+          
+          # 生成 SHA256 校验和
+          cd release
+          sha256sum * > SHA256SUMS.txt || true
+          cd ..
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64-release
+          path: release/*
+          retention-days: 30
+
+      - name: Create Release (on tag)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v1
+        with:
+          files: release/*
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

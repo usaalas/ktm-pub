@@ -1,0 +1,168 @@
+name: Release Build (Multi-Platform)
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: 'windows-latest'
+            target: 'x86_64-pc-windows-msvc'
+            bundles: 'msi,nsis'
+          - platform: 'macos-latest'
+            target: 'aarch64-apple-darwin'
+            bundles: 'dmg'
+          - platform: 'macos-latest'
+            target: 'x86_64-apple-darwin'
+            bundles: 'dmg'
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - name: Checkout private repo
+        uses: actions/checkout@v4
+        with:
+          repository: anthropics/KTM  # 替换为你的私有仓库地址
+          token: ${{ secrets.PRIVATE_REPO_PAT }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Get version
+        id: version
+        shell: bash
+        run: echo "VERSION=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Build Rust backend
+        shell: bash
+        run: |
+          cd src-tauri
+          cargo build --release --target ${{ matrix.target }}
+          cd ..
+
+      # Windows 加壳
+      - name: Binary packing (Windows)
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          $binaryPath = "src-tauri/target/${{ matrix.target }}/release/kiro-token-manager.exe"
+          if (Test-Path $binaryPath) {
+            if (Get-Command strip -ErrorAction SilentlyContinue) {
+              strip $binaryPath
+            }
+            $junkData = New-Object byte[] 262144
+            (New-Object Random).NextBytes($junkData)
+            $fs = [System.IO.File]::Open($binaryPath, [System.IO.FileMode]::Append)
+            $fs.Write($junkData, 0, $junkData.Length)
+            $fs.Close()
+            Write-Host "✓ Windows binary packing completed"
+          }
+
+      # macOS 加壳
+      - name: Binary packing (macOS)
+        if: matrix.platform == 'macos-latest'
+        run: |
+          BINARY_PATH="src-tauri/target/${{ matrix.target }}/release/kiro-token-manager"
+          if [ -f "$BINARY_PATH" ]; then
+            # 符号剥离
+            strip -x "$BINARY_PATH" 2>/dev/null || true
+            strip -S "$BINARY_PATH" 2>/dev/null || true
+            
+            # 动态库路径混淆
+            DYLIBS=$(otool -L "$BINARY_PATH" | grep -v ":" | awk '{print $1}' | grep -v "^$" | grep -v "/System/" | grep -v "/usr/lib/" || true)
+            for dylib in $DYLIBS; do
+              RANDOM_NAME=$(openssl rand -hex 8)
+              install_name_tool -change "$dylib" "@executable_path/../Frameworks/lib${RANDOM_NAME}.dylib" "$BINARY_PATH" 2>/dev/null || true
+            done
+            
+            # 注入垃圾数据
+            dd if=/dev/urandom bs=1024 count=256 >> "$BINARY_PATH" 2>/dev/null
+            
+            # 修改时间戳
+            touch -t 200001010000 "$BINARY_PATH" 2>/dev/null || true
+            
+            echo "✓ macOS binary packing completed"
+          fi
+
+      - name: Build Tauri app
+        run: npm run tauri build -- --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+
+      - name: Prepare release files
+        shell: bash
+        run: |
+          mkdir -p release
+          VERSION=${{ steps.version.outputs.VERSION }}
+          TARGET=${{ matrix.target }}
+          
+          # Windows
+          if [ "${{ matrix.platform }}" = "windows-latest" ]; then
+            for f in src-tauri/target/${TARGET}/release/bundle/msi/*.msi; do
+              [ -f "$f" ] && cp "$f" "release/KiroTokenManager_${VERSION}_x64.msi"
+            done
+            for f in src-tauri/target/${TARGET}/release/bundle/nsis/*.exe; do
+              [ -f "$f" ] && cp "$f" "release/KiroTokenManager_${VERSION}_x64_setup.exe"
+            done
+          fi
+          
+          # macOS
+          if [ "${{ matrix.platform }}" = "macos-latest" ]; then
+            ARCH_NAME="x64"
+            [ "$TARGET" = "aarch64-apple-darwin" ] && ARCH_NAME="aarch64"
+            for f in src-tauri/target/${TARGET}/release/bundle/dmg/*.dmg; do
+              [ -f "$f" ] && cp "$f" "release/KiroTokenManager_${VERSION}_${ARCH_NAME}.dmg"
+            done
+          fi
+          
+          # 生成校验和
+          cd release
+          if [ "${{ matrix.platform }}" = "macos-latest" ]; then
+            shasum -a 256 * > SHA256SUMS.txt 2>/dev/null || true
+          else
+            sha256sum * > SHA256SUMS.txt 2>/dev/null || true
+          fi
+          cd ..
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
+          path: release/*
+          retention-days: 30
+
+      - name: Create Release (on tag)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v1
+        with:
+          files: release/*
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
