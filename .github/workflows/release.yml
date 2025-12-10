@@ -87,8 +87,12 @@ jobs:
             echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
             echo "Using tag version: $VERSION"
             
+            # Cargo.toml 只支持 semver (x.y.z)，截取前3段
+            CARGO_VERSION=$(echo "$VERSION" | cut -d'.' -f1-3)
+            echo "Cargo version: $CARGO_VERSION"
+            
             npm pkg set version="$VERSION"
-            sed -i.bak "s/^version = \".*\"/version = \"$VERSION\"/" src-tauri/Cargo.toml
+            sed -i.bak "s/^version = \".*\"/version = \"$CARGO_VERSION\"/" src-tauri/Cargo.toml
             rm -f src-tauri/Cargo.toml.bak
             
             if [ -f "src-tauri/tauri.conf.json" ]; then
@@ -96,7 +100,7 @@ jobs:
               rm -f src-tauri/tauri.conf.json.bak
             fi
             
-            echo "✓ Version updated to $VERSION"
+            echo "✓ Version updated to $VERSION (Cargo: $CARGO_VERSION)"
           else
             VERSION=$(node -p "require('./package.json').version")
             echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
