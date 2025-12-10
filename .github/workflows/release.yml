@@ -194,34 +194,38 @@ jobs:
           Copy-Item $binaryPath "$portableFullDir/KiroTokenManager.exe"
           New-Item -ItemType File -Path "$portableFullDir/.portable" -Force
           
-          # 下载 WebView2 固定版本运行时 (Fixed Version Runtime)
-          Write-Host "Downloading WebView2 Fixed Version Runtime..."
-          # 使用 Microsoft 官方固定版本运行时 CAB 包
-          $webview2Version = "131.0.2903.112"
-          $cabUrl = "https://msedge.sf.dl.delivery.mp.microsoft.com/filestreamingservice/files/f24e4fc5-b2e5-4a0c-9a63-b04f14d8d107/Microsoft.WebView2.FixedVersionRuntime.${webview2Version}.x64.cab"
+          # 从系统已安装的 Edge/WebView2 复制运行时文件
+          Write-Host "Copying WebView2 Runtime from system..."
           
-          Write-Host "Downloading from: $cabUrl"
-          Invoke-WebRequest -Uri $cabUrl -OutFile "webview2.cab"
+          # GitHub Actions Windows runner 已预装 Edge，包含 WebView2
+          $edgePaths = @(
+            "${env:ProgramFiles(x86)}\Microsoft\EdgeWebView\Application",
+            "${env:ProgramFiles}\Microsoft\EdgeWebView\Application",
+            "${env:ProgramFiles(x86)}\Microsoft\Edge\Application",
+            "${env:ProgramFiles}\Microsoft\Edge\Application"
+          )
           
-          # 解压 CAB 文件
-          New-Item -ItemType Directory -Force -Path "webview2-extracted"
-          expand webview2.cab -F:* webview2-extracted
-          
-          # 查找并复制 WebView2 运行时文件夹
-          $runtimeDir = Get-ChildItem -Path "webview2-extracted" -Directory | Where-Object { $_.Name -like "Microsoft.WebView2*" } | Select-Object -First 1
-          if ($runtimeDir) {
-            # 复制整个运行时到便携版目录
-            Copy-Item -Path $runtimeDir.FullName -Destination "$portableFullDir/WebView2" -Recurse
-            Write-Host "✓ WebView2 Fixed Version Runtime copied to WebView2/"
-          } else {
-            # 如果没有子目录，直接复制所有文件
-            Copy-Item -Path "webview2-extracted/*" -Destination "$portableFullDir/WebView2" -Recurse
-            Write-Host "✓ WebView2 Fixed Version Runtime copied"
+          $webview2Found = $false
+          foreach ($basePath in $edgePaths) {
+            if (Test-Path $basePath) {
+              # 找到版本目录（如 131.0.2903.112）
+              $versionDir = Get-ChildItem -Path $basePath -Directory | Where-Object { $_.Name -match '^\d+\.\d+\.\d+\.\d+$' } | Sort-Object Name -Descending | Select-Object -First 1
+              if ($versionDir) {
+                Write-Host "Found WebView2 at: $($versionDir.FullName)"
+                New-Item -ItemType Directory -Force -Path "$portableFullDir/WebView2"
+                Copy-Item -Path "$($versionDir.FullName)\*" -Destination "$portableFullDir/WebView2" -Recurse -Force
+                $webview2Found = $true
+                Write-Host "✓ WebView2 Runtime copied (version: $($versionDir.Name))"
+                break
+              }
+            }
           }
           
-          # 清理临时文件
-          Remove-Item "webview2.cab" -ErrorAction SilentlyContinue
-          Remove-Item "webview2-extracted" -Recurse -ErrorAction SilentlyContinue
+          if (-not $webview2Found) {
+            Write-Host "⚠ WebView2 not found in system, downloading standalone installer..."
+            Invoke-WebRequest -Uri "https://go.microsoft.com/fwlink/?linkid=2124701" -OutFile "$portableFullDir/MicrosoftEdgeWebView2RuntimeInstallerX64.exe" -MaximumRedirection 10
+            Write-Host "✓ WebView2 Standalone Installer downloaded as fallback"
+          }
           
           Compress-Archive -Path $portableFullDir -DestinationPath "portable/KiroTokenManager_${VERSION}_x64_portable_full.zip"
           Write-Host "✓ Portable full version (with WebView2) created"
