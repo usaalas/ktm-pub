@@ -188,31 +188,40 @@ jobs:
           Compress-Archive -Path $portableDir -DestinationPath "portable/KiroTokenManager_${VERSION}_x64_portable.zip"
           Write-Host "✓ Portable version created"
           
-          # 便携版完整版（内置 WebView2）
+          # 便携版完整版（内置 WebView2 Fixed Version Runtime）
           $portableFullDir = "portable/KiroTokenManager_${VERSION}_x64_portable_full"
           New-Item -ItemType Directory -Force -Path $portableFullDir
           Copy-Item $binaryPath "$portableFullDir/KiroTokenManager.exe"
           New-Item -ItemType File -Path "$portableFullDir/.portable" -Force
           
-          # 下载 WebView2 固定版本运行时
-          Write-Host "Downloading WebView2 Runtime..."
-          $webview2Url = "https://msedge.sf.dl.delivery.mp.microsoft.com/filestreamingservice/files/c0e0f467-1f26-4d4f-a6b6-e1d5d3f1f2a1/MicrosoftEdgeWebView2RuntimeInstallerX64.exe"
-          # 使用 WebView2 Loader DLL 方式（更小）
-          # 从 NuGet 包获取 WebView2Loader.dll
-          $nugetUrl = "https://www.nuget.org/api/v2/package/Microsoft.Web.WebView2"
-          Invoke-WebRequest -Uri $nugetUrl -OutFile "webview2.nupkg"
-          Expand-Archive -Path "webview2.nupkg" -DestinationPath "webview2-temp" -Force
+          # 下载 WebView2 固定版本运行时 (Fixed Version Runtime)
+          Write-Host "Downloading WebView2 Fixed Version Runtime..."
+          # 使用 Microsoft 官方固定版本运行时 CAB 包
+          $webview2Version = "131.0.2903.112"
+          $cabUrl = "https://msedge.sf.dl.delivery.mp.microsoft.com/filestreamingservice/files/f24e4fc5-b2e5-4a0c-9a63-b04f14d8d107/Microsoft.WebView2.FixedVersionRuntime.${webview2Version}.x64.cab"
           
-          # 复制 x64 的 WebView2Loader.dll
-          $loaderPath = "webview2-temp/runtimes/win-x64/native/WebView2Loader.dll"
-          if (Test-Path $loaderPath) {
-            Copy-Item $loaderPath "$portableFullDir/"
-            Write-Host "✓ WebView2Loader.dll copied"
+          Write-Host "Downloading from: $cabUrl"
+          Invoke-WebRequest -Uri $cabUrl -OutFile "webview2.cab"
+          
+          # 解压 CAB 文件
+          New-Item -ItemType Directory -Force -Path "webview2-extracted"
+          expand webview2.cab -F:* webview2-extracted
+          
+          # 查找并复制 WebView2 运行时文件夹
+          $runtimeDir = Get-ChildItem -Path "webview2-extracted" -Directory | Where-Object { $_.Name -like "Microsoft.WebView2*" } | Select-Object -First 1
+          if ($runtimeDir) {
+            # 复制整个运行时到便携版目录
+            Copy-Item -Path $runtimeDir.FullName -Destination "$portableFullDir/WebView2" -Recurse
+            Write-Host "✓ WebView2 Fixed Version Runtime copied to WebView2/"
+          } else {
+            # 如果没有子目录，直接复制所有文件
+            Copy-Item -Path "webview2-extracted/*" -Destination "$portableFullDir/WebView2" -Recurse
+            Write-Host "✓ WebView2 Fixed Version Runtime copied"
           }
           
           # 清理临时文件
-          Remove-Item "webview2.nupkg" -ErrorAction SilentlyContinue
-          Remove-Item "webview2-temp" -Recurse -ErrorAction SilentlyContinue
+          Remove-Item "webview2.cab" -ErrorAction SilentlyContinue
+          Remove-Item "webview2-extracted" -Recurse -ErrorAction SilentlyContinue
           
           Compress-Archive -Path $portableFullDir -DestinationPath "portable/KiroTokenManager_${VERSION}_x64_portable_full.zip"
           Write-Host "✓ Portable full version (with WebView2) created"
