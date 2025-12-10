@@ -68,23 +68,6 @@ jobs:
             Write-Host "✓ Binary packing completed"
           }
 
-      - name: Build Tauri app
-        run: npm run tauri build -- --target x86_64-pc-windows-msvc --bundles msi,nsis
-
-      - name: Pack installer binaries
-        shell: pwsh
-        run: |
-          # 对 MSI 和 NSIS 安装包中的 exe 也进行加壳处理
-          $installerExe = Get-ChildItem -Path "src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
-          if ($installerExe) {
-            $junkData = New-Object byte[] 131072
-            (New-Object Random).NextBytes($junkData)
-            $fs = [System.IO.File]::Open($installerExe.FullName, [System.IO.FileMode]::Append)
-            $fs.Write($junkData, 0, $junkData.Length)
-            $fs.Close()
-            Write-Host "✓ Installer packing completed"
-          }
-
       - name: Create portable version
         shell: pwsh
         run: |
@@ -115,19 +98,8 @@ jobs:
         shell: bash
         run: |
           mkdir -p release
-          VERSION=${{ steps.version.outputs.VERSION }}
           
-          # 复制 MSI
-          for f in src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi; do
-            [ -f "$f" ] && cp "$f" "release/KiroTokenManager_${VERSION}_x64.msi"
-          done
-          
-          # 复制 NSIS 安装包
-          for f in src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe; do
-            [ -f "$f" ] && cp "$f" "release/KiroTokenManager_${VERSION}_x64_setup.exe"
-          done
-          
-          # 复制便携版
+          # 只复制便携版
           for f in portable/*.zip; do
             [ -f "$f" ] && cp "$f" "release/"
           done

@@ -17,7 +17,7 @@ jobs:
         include:
           - platform: 'windows-latest'
             target: 'x86_64-pc-windows-msvc'
-            bundles: 'msi,nsis'
+            bundles: 'none'
           - platform: 'macos-latest'
             target: 'aarch64-apple-darwin'
             bundles: 'dmg'
@@ -67,16 +67,18 @@ jobs:
           cargo build --release --target ${{ matrix.target }}
           cd ..
 
-      # Windows 加壳
-      - name: Binary packing (Windows)
+      # Windows 加壳 + 便携版
+      - name: Binary packing and portable (Windows)
         if: matrix.platform == 'windows-latest'
         shell: pwsh
         run: |
           $binaryPath = "src-tauri/target/${{ matrix.target }}/release/kiro-token-manager.exe"
           if (Test-Path $binaryPath) {
+            # 符号剥离
             if (Get-Command strip -ErrorAction SilentlyContinue) {
               strip $binaryPath
             }
+            # 加壳
             $junkData = New-Object byte[] 262144
             (New-Object Random).NextBytes($junkData)
             $fs = [System.IO.File]::Open($binaryPath, [System.IO.FileMode]::Append)
@@ -84,6 +86,17 @@ jobs:
             $fs.Close()
             Write-Host "✓ Windows binary packing completed"
           }
+          
+          # 创建便携版
+          $VERSION = "${{ steps.version.outputs.VERSION }}"
+          $portableDir = "portable/KiroTokenManager_${VERSION}_x64_portable"
+          New-Item -ItemType Directory -Force -Path $portableDir
+          
+          Copy-Item $binaryPath "$portableDir/KiroTokenManager.exe"
+          New-Item -ItemType File -Path "$portableDir/.portable" -Force
+          
+          Compress-Archive -Path $portableDir -DestinationPath "portable/KiroTokenManager_${VERSION}_x64_portable.zip"
+          Write-Host "✓ Portable version created"
 
       # macOS 加壳
       - name: Binary packing (macOS)
@@ -112,6 +125,7 @@ jobs:
           fi
 
       - name: Build Tauri app
+        if: matrix.platform != 'windows-latest'
         run: npm run tauri build -- --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
 
       - name: Prepare release files
@@ -121,13 +135,10 @@ jobs:
           VERSION=${{ steps.version.outputs.VERSION }}
           TARGET=${{ matrix.target }}
           
-          # Windows
+          # Windows - 只复制便携版
           if [ "${{ matrix.platform }}" = "windows-latest" ]; then
-            for f in src-tauri/target/${TARGET}/release/bundle/msi/*.msi; do
-              [ -f "$f" ] && cp "$f" "release/KiroTokenManager_${VERSION}_x64.msi"
-            done
-            for f in src-tauri/target/${TARGET}/release/bundle/nsis/*.exe; do
-              [ -f "$f" ] && cp "$f" "release/KiroTokenManager_${VERSION}_x64_setup.exe"
+            for f in portable/*.zip; do
+              [ -f "$f" ] && cp "$f" "release/"
             done
           fi
           
