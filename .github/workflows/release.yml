@@ -92,26 +92,53 @@ jobs:
             echo "Cargo version: $CARGO_VERSION"
             
             npm pkg set version="$VERSION"
-            sed -i.bak "s/^version = \".*\"/version = \"$CARGO_VERSION\"/" src-tauri/Cargo.toml
-            rm -f src-tauri/Cargo.toml.bak
-            
-            # tauri.conf.json 也需要 semver 格式
-            if [ -f "src-tauri/tauri.conf.json" ]; then
-              sed -i.bak "s/\"version\": \".*\"/\"version\": \"$CARGO_VERSION\"/" src-tauri/tauri.conf.json
-              rm -f src-tauri/tauri.conf.json.bak
-            fi
-            
-            echo "✓ Version updated to $VERSION (Cargo: $CARGO_VERSION)"
           else
             VERSION=$(node -p "require('./package.json').version")
             echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
             echo "Using package.json version: $VERSION"
+            CARGO_VERSION="$VERSION"
           fi
+          echo "CARGO_VERSION=$CARGO_VERSION" >> $GITHUB_OUTPUT
+
+      # 使用 Node.js 更新版本（跨平台兼容）
+      - name: Update Cargo.toml and tauri.conf.json version
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: node {0}
+        run: |
+          const fs = require('fs');
+          const version = '${{ steps.version.outputs.CARGO_VERSION }}' || '${{ steps.version.outputs.VERSION }}'.split('.').slice(0, 3).join('.');
+          
+          // Update Cargo.toml
+          const cargoPath = 'src-tauri/Cargo.toml';
+          let cargo = fs.readFileSync(cargoPath, 'utf8');
+          cargo = cargo.replace(/^version = ".*"/m, `version = "${version}"`);
+          fs.writeFileSync(cargoPath, cargo);
+          console.log(`✓ Updated Cargo.toml to version ${version}`);
+          
+          // Update tauri.conf.json
+          const tauriConfPath = 'src-tauri/tauri.conf.json';
+          if (fs.existsSync(tauriConfPath)) {
+            let tauriConf = fs.readFileSync(tauriConfPath, 'utf8');
+            tauriConf = tauriConf.replace(/"version": ".*"/, `"version": "${version}"`);
+            fs.writeFileSync(tauriConfPath, tauriConf);
+            console.log(`✓ Updated tauri.conf.json to version ${version}`);
+          }
 
       - name: Build frontend
         run: npm run build
 
-      - name: Build Rust backend
+      # Windows: 使用 cargo 直接编译（不使用 tauri build，避免打包问题）
+      - name: Build Rust backend (Windows)
+        if: matrix.platform == 'windows-latest'
+        shell: bash
+        run: |
+          cd src-tauri
+          cargo build --release --target ${{ matrix.target }}
+          cd ..
+
+      # macOS/Linux: 先编译后端，后续再打包
+      - name: Build Rust backend (macOS/Linux)
+        if: matrix.platform != 'windows-latest'
         shell: bash
         run: |
           cd src-tauri
