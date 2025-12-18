@@ -3,6 +3,13 @@ name: Release Build (Multi-Platform)
 # ============================================================================
 # 多平台构建脚本（完整防逆向保护）
 # 
+# 构建流程（与本地 build-macos-universal.sh 保持一致）：
+# 1. npm install - 安装依赖
+# 2. npm run build - 构建前端（含代码混淆）
+# 3. cargo build --release - 构建 Rust 后端
+# 4. 二进制加壳处理
+# 5. npm run tauri build --bundles xxx - 打包应用
+# 
 # Windows 输出：
 # - 便携版（需要系统已安装 WebView2）
 # - 便携版完整版（内置 WebView2，无需额外安装）
@@ -13,6 +20,7 @@ name: Release Build (Multi-Platform)
 # Linux 输出：
 # - DEB 包
 # - RPM 包
+# - 通用二进制 tar.gz
 # ============================================================================
 
 on:
@@ -74,9 +82,15 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libgtk-3-dev
 
+      # ========================================
+      # 步骤 1: 安装依赖
+      # ========================================
       - name: Install dependencies
         run: npm ci
 
+      # ========================================
+      # 版本处理
+      # ========================================
       - name: Get version from tag or package.json
         id: version
         shell: bash
@@ -108,9 +122,15 @@ jobs:
             echo "Using package.json version: $VERSION"
           fi
 
-      - name: Build frontend
+      # ========================================
+      # 步骤 2: 构建前端（含代码混淆）
+      # ========================================
+      - name: Build frontend (with obfuscation)
         run: npm run build
 
+      # ========================================
+      # 步骤 3: 构建 Rust 后端
+      # ========================================
       - name: Build Rust backend
         shell: bash
         run: |
@@ -119,8 +139,10 @@ jobs:
           cd ..
 
       # ========================================
-      # Windows: 安装 UPX + 加壳 + 便携版
+      # 步骤 4: 二进制加壳处理
       # ========================================
+
+      # Windows: 安装 UPX
       - name: Install UPX (Windows)
         if: matrix.platform == 'windows-latest'
         shell: pwsh
@@ -135,12 +157,12 @@ jobs:
           Remove-Item "upx-temp" -Recurse
           Write-Host "✓ UPX installed"
 
-      - name: Binary packing and portable (Windows)
+      # Windows: 加壳处理
+      - name: Binary packing (Windows)
         if: matrix.platform == 'windows-latest'
         shell: pwsh
         run: |
           $binaryPath = "src-tauri/target/${{ matrix.target }}/release/kiro-token-manager.exe"
-          $VERSION = "${{ steps.version.outputs.VERSION }}"
           
           if (Test-Path $binaryPath) {
             Write-Host "=== Binary Hardening (Windows) ===" -ForegroundColor Green
@@ -176,6 +198,98 @@ jobs:
             Write-Host "Packed size: $packedSize bytes"
             Write-Host "=== Hardening Complete ===" -ForegroundColor Green
           }
+
+      # macOS: 加壳处理（与 build-macos-universal.sh 一致）
+      - name: Binary packing (macOS)
+        if: matrix.platform == 'macos-latest'
+        run: |
+          BINARY_PATH="src-tauri/target/${{ matrix.target }}/release/kiro-token-manager"
+          if [ -f "$BINARY_PATH" ]; then
+            echo "=== Binary Hardening (macOS) ==="
+            ORIGINAL_SIZE=$(stat -f%z "$BINARY_PATH" 2>/dev/null || stat -c%s "$BINARY_PATH")
+            echo "Original size: $ORIGINAL_SIZE bytes"
+            
+            # 1. 符号剥离
+            strip -x "$BINARY_PATH" 2>/dev/null || true
+            strip -S "$BINARY_PATH" 2>/dev/null || true
+            echo "✓ Symbol stripping"
+            
+            # 2. 动态库路径混淆
+            DYLIBS=$(otool -L "$BINARY_PATH" | grep -v ":" | awk '{print $1}' | grep -v "^$" | grep -v "/System/" | grep -v "/usr/lib/" || true)
+            for dylib in $DYLIBS; do
+              RANDOM_NAME=$(openssl rand -hex 8)
+              install_name_tool -change "$dylib" "@executable_path/../Frameworks/lib${RANDOM_NAME}.dylib" "$BINARY_PATH" 2>/dev/null || true
+            done
+            echo "✓ Dynamic library path obfuscation"
+            
+            # 3. 垃圾数据注入（256KB）
+            JUNK_FILE=$(mktemp)
+            dd if=/dev/urandom of="$JUNK_FILE" bs=1024 count=256 2>/dev/null
+            cat "$JUNK_FILE" >> "$BINARY_PATH"
+            rm -f "$JUNK_FILE"
+            echo "✓ Junk data injection (256KB)"
+            
+            # 4. 时间戳混淆
+            touch -t 200001010000 "$BINARY_PATH" 2>/dev/null || true
+            echo "✓ Timestamp obfuscation"
+            
+            PACKED_SIZE=$(stat -f%z "$BINARY_PATH" 2>/dev/null || stat -c%s "$BINARY_PATH")
+            echo "Packed size: $PACKED_SIZE bytes"
+            echo "=== Hardening Complete ==="
+          fi
+
+      # Linux: 加壳处理
+      - name: Binary packing (Linux)
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          BINARY_PATH="src-tauri/target/${{ matrix.target }}/release/kiro-token-manager"
+          
+          if [ -f "$BINARY_PATH" ]; then
+            echo "=== Binary Hardening (Linux) ==="
+            ORIGINAL_SIZE=$(stat -c%s "$BINARY_PATH")
+            echo "Original size: $ORIGINAL_SIZE bytes"
+            
+            # 1. 符号剥离
+            strip --strip-all "$BINARY_PATH" 2>/dev/null || true
+            echo "✓ Symbol stripping"
+            
+            # 2. 垃圾数据注入（256KB）
+            JUNK_FILE=$(mktemp)
+            dd if=/dev/urandom of="$JUNK_FILE" bs=1024 count=256 2>/dev/null
+            cat "$JUNK_FILE" >> "$BINARY_PATH"
+            rm -f "$JUNK_FILE"
+            echo "✓ Junk data injection (256KB)"
+            
+            # 3. 时间戳混淆
+            touch -t 200001010000 "$BINARY_PATH" 2>/dev/null || true
+            echo "✓ Timestamp obfuscation"
+            
+            PACKED_SIZE=$(stat -c%s "$BINARY_PATH")
+            echo "Packed size: $PACKED_SIZE bytes"
+            echo "=== Hardening Complete ==="
+          fi
+
+      # ========================================
+      # 步骤 5: 打包 Tauri 应用
+      # ========================================
+
+      # macOS: 打包 DMG
+      - name: Bundle Tauri app (macOS)
+        if: matrix.platform == 'macos-latest'
+        run: npm run tauri build -- --target ${{ matrix.target }} --bundles dmg
+
+      # Linux: 打包 DEB/RPM
+      - name: Bundle Tauri app (Linux)
+        if: matrix.platform == 'ubuntu-22.04'
+        run: npm run tauri build -- --target ${{ matrix.target }} --bundles deb,rpm
+
+      # Windows: 创建便携版
+      - name: Create portable versions (Windows)
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          $binaryPath = "src-tauri/target/${{ matrix.target }}/release/kiro-token-manager.exe"
+          $VERSION = "${{ steps.version.outputs.VERSION }}"
           
           # 创建便携版目录
           New-Item -ItemType Directory -Force -Path "portable"
@@ -197,7 +311,6 @@ jobs:
           # 从系统已安装的 Edge/WebView2 复制运行时文件
           Write-Host "Copying WebView2 Runtime from system..."
           
-          # GitHub Actions Windows runner 已预装 Edge，包含 WebView2
           $edgePaths = @(
             "${env:ProgramFiles(x86)}\Microsoft\EdgeWebView\Application",
             "${env:ProgramFiles}\Microsoft\EdgeWebView\Application",
@@ -208,7 +321,6 @@ jobs:
           $webview2Found = $false
           foreach ($basePath in $edgePaths) {
             if (Test-Path $basePath) {
-              # 找到版本目录（如 131.0.2903.112）
               $versionDir = Get-ChildItem -Path $basePath -Directory | Where-Object { $_.Name -match '^\d+\.\d+\.\d+\.\d+$' } | Sort-Object Name -Descending | Select-Object -First 1
               if ($versionDir) {
                 Write-Host "Found WebView2 at: $($versionDir.FullName)"
@@ -230,82 +342,24 @@ jobs:
           Compress-Archive -Path $portableFullDir -DestinationPath "portable/KiroTokenManager_${VERSION}_x64_portable_full.zip"
           Write-Host "✓ Portable full version (with WebView2) created"
 
-      # ========================================
-      # macOS: 加壳
-      # ========================================
-      - name: Binary packing (macOS)
-        if: matrix.platform == 'macos-latest'
-        run: |
-          BINARY_PATH="src-tauri/target/${{ matrix.target }}/release/kiro-token-manager"
-          if [ -f "$BINARY_PATH" ]; then
-            echo "=== Binary Hardening (macOS) ==="
-            ORIGINAL_SIZE=$(stat -f%z "$BINARY_PATH" 2>/dev/null || stat -c%s "$BINARY_PATH")
-            echo "Original size: $ORIGINAL_SIZE bytes"
-            
-            strip -x "$BINARY_PATH" 2>/dev/null || true
-            strip -S "$BINARY_PATH" 2>/dev/null || true
-            echo "✓ Symbol stripping"
-            
-            DYLIBS=$(otool -L "$BINARY_PATH" | grep -v ":" | awk '{print $1}' | grep -v "^$" | grep -v "/System/" | grep -v "/usr/lib/" || true)
-            for dylib in $DYLIBS; do
-              RANDOM_NAME=$(openssl rand -hex 8)
-              install_name_tool -change "$dylib" "@executable_path/../Frameworks/lib${RANDOM_NAME}.dylib" "$BINARY_PATH" 2>/dev/null || true
-            done
-            echo "✓ Dynamic library path obfuscation"
-            
-            JUNK_FILE=$(mktemp)
-            dd if=/dev/urandom of="$JUNK_FILE" bs=1024 count=256 2>/dev/null
-            cat "$JUNK_FILE" >> "$BINARY_PATH"
-            rm -f "$JUNK_FILE"
-            echo "✓ Junk data injection (256KB)"
-            
-            touch -t 200001010000 "$BINARY_PATH" 2>/dev/null || true
-            echo "✓ Timestamp obfuscation"
-            
-            PACKED_SIZE=$(stat -f%z "$BINARY_PATH" 2>/dev/null || stat -c%s "$BINARY_PATH")
-            echo "Packed size: $PACKED_SIZE bytes"
-            echo "=== Hardening Complete ==="
-          fi
-
-      # ========================================
-      # Linux: 加壳 + 通用二进制
-      # ========================================
-      - name: Binary packing (Linux)
+      # Linux: 创建通用二进制包
+      - name: Create Linux portable (Linux)
         if: matrix.platform == 'ubuntu-22.04'
         run: |
           BINARY_PATH="src-tauri/target/${{ matrix.target }}/release/kiro-token-manager"
           VERSION="${{ steps.version.outputs.VERSION }}"
           
           if [ -f "$BINARY_PATH" ]; then
-            echo "=== Binary Hardening (Linux) ==="
-            ORIGINAL_SIZE=$(stat -c%s "$BINARY_PATH")
-            echo "Original size: $ORIGINAL_SIZE bytes"
-            
-            strip --strip-all "$BINARY_PATH" 2>/dev/null || true
-            echo "✓ Symbol stripping"
-            
-            JUNK_FILE=$(mktemp)
-            dd if=/dev/urandom of="$JUNK_FILE" bs=1024 count=256 2>/dev/null
-            cat "$JUNK_FILE" >> "$BINARY_PATH"
-            rm -f "$JUNK_FILE"
-            echo "✓ Junk data injection (256KB)"
-            
-            touch -t 200001010000 "$BINARY_PATH" 2>/dev/null || true
-            echo "✓ Timestamp obfuscation"
-            
-            PACKED_SIZE=$(stat -c%s "$BINARY_PATH")
-            echo "Packed size: $PACKED_SIZE bytes"
-            echo "=== Hardening Complete ==="
-            
-            # 创建通用 Linux 二进制包
             mkdir -p "linux-portable/KiroTokenManager_${VERSION}_linux_x64"
             cp "$BINARY_PATH" "linux-portable/KiroTokenManager_${VERSION}_linux_x64/kiro-token-manager"
             chmod +x "linux-portable/KiroTokenManager_${VERSION}_linux_x64/kiro-token-manager"
             
             # 创建启动脚本
-            echo '#!/bin/bash' > "linux-portable/KiroTokenManager_${VERSION}_linux_x64/run.sh"
-            echo 'SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"' >> "linux-portable/KiroTokenManager_${VERSION}_linux_x64/run.sh"
-            echo 'exec "$SCRIPT_DIR/kiro-token-manager" "$@"' >> "linux-portable/KiroTokenManager_${VERSION}_linux_x64/run.sh"
+            cat > "linux-portable/KiroTokenManager_${VERSION}_linux_x64/run.sh" << 'EOF'
+#!/bin/bash
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+exec "$SCRIPT_DIR/kiro-token-manager" "$@"
+EOF
             chmod +x "linux-portable/KiroTokenManager_${VERSION}_linux_x64/run.sh"
             
             # 打包为 tar.gz
@@ -314,17 +368,6 @@ jobs:
             cd ..
             echo "✓ Linux portable tar.gz created"
           fi
-
-      # ========================================
-      # 打包 Tauri 应用（macOS 和 Linux）
-      # ========================================
-      - name: Bundle Tauri app (macOS)
-        if: matrix.platform == 'macos-latest'
-        run: npm run tauri build -- --target ${{ matrix.target }} --bundles dmg
-
-      - name: Bundle Tauri app (Linux)
-        if: matrix.platform == 'ubuntu-22.04'
-        run: npm run tauri build -- --target ${{ matrix.target }} --bundles deb,rpm
 
       # ========================================
       # 准备发布文件
@@ -361,7 +404,6 @@ jobs:
             for f in src-tauri/target/${TARGET}/release/bundle/rpm/*.rpm; do
               [ -f "$f" ] && cp "$f" "release/KiroTokenManager_${VERSION}_x86_64.rpm"
             done
-            # 通用 Linux 二进制
             for f in linux-portable/*.tar.gz; do
               [ -f "$f" ] && cp "$f" "release/"
             done
