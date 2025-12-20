@@ -1,26 +1,18 @@
 name: Release Build (Multi-Platform)
 
 # ============================================================================
-# 多平台构建脚本（完整防逆向保护）
+# 多平台构建脚本
 # 
-# 构建流程（与本地 build-macos-universal.sh 保持一致）：
-# 1. npm install - 安装依赖
-# 2. npm run build - 构建前端（含代码混淆）
-# 3. cargo build --release - 构建 Rust 后端
-# 4. 二进制加壳处理
-# 5. npm run tauri build --bundles xxx - 打包应用
+# 与 KTM 本地构建脚本保持一致：
+# - macOS: build-macos-universal.sh（aarch64 + x64 DMG）
+# - Windows: build-windows.bat（便携版 + 安装版）
+# - Linux: Dockerfile.build（DEB + RPM）
 # 
-# Windows 输出：
-# - 便携版（需要系统已安装 WebView2）
-# - 便携版完整版（内置 WebView2，无需额外安装）
-# 
-# macOS 输出：
-# - DMG 安装包（x64 和 ARM）
-#
-# Linux 输出：
-# - DEB 包
-# - RPM 包
-# - 通用二进制 tar.gz
+# 集成保护措施：
+# - 前端代码混淆（控制流扁平化、字符串加密、死代码注入）
+# - Rust LTO 优化和符号剥离
+# - 运行时反调试（ptrace、调试器检测、完整性检查）
+# - 二进制加壳（符号剥离、垃圾数据注入、时间戳混淆）
 # ============================================================================
 
 on:
@@ -75,7 +67,7 @@ jobs:
         with:
           workspaces: './src-tauri -> target'
 
-      # Linux: 安装系统依赖
+      # Linux: 安装系统依赖（与 Dockerfile.build 一致）
       - name: Install Linux dependencies
         if: matrix.platform == 'ubuntu-22.04'
         run: |
@@ -100,11 +92,6 @@ jobs:
             VERSION="${VERSION#v}"
             echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
             echo "Using tag version: $VERSION"
-            
-            # Cargo.toml 只支持 semver (x.y.z)，截取前3段
-            CARGO_VERSION=$(echo "$VERSION" | cut -d'.' -f1-3)
-            echo "Cargo version: $CARGO_VERSION"
-            
             npm pkg set version="$VERSION"
           else
             VERSION=$(node -p "require('./package.json').version")
@@ -129,7 +116,7 @@ jobs:
           cd ..
 
       # ========================================
-      # 步骤 4: 二进制加壳处理
+      # 步骤 4: 二进制加壳处理（与本地脚本一致）
       # ========================================
 
       # Windows: 安装 UPX
@@ -273,13 +260,13 @@ jobs:
         if: matrix.platform == 'ubuntu-22.04'
         run: npm run tauri build -- --target ${{ matrix.target }} --bundles deb,rpm
 
-      # Windows: 创建便携版
-      - name: Create portable versions (Windows)
+      # Windows: 创建便携版和安装版
+      - name: Bundle Tauri app (Windows)
         if: matrix.platform == 'windows-latest'
         shell: pwsh
         run: |
-          $binaryPath = "src-tauri/target/${{ matrix.target }}/release/kiro-token-manager.exe"
           $VERSION = "${{ steps.version.outputs.VERSION }}"
+          $binaryPath = "src-tauri/target/${{ matrix.target }}/release/kiro-token-manager.exe"
           
           # 创建便携版目录
           New-Item -ItemType Directory -Force -Path "portable"
@@ -292,15 +279,14 @@ jobs:
           Compress-Archive -Path $portableDir -DestinationPath "portable/KiroTokenManager_${VERSION}_x64_portable.zip"
           Write-Host "✓ Portable version created"
           
-          # 便携版完整版（内置 WebView2 Fixed Version Runtime）
+          # 便携版完整版（内置 WebView2）
           $portableFullDir = "portable/KiroTokenManager_${VERSION}_x64_portable_full"
           New-Item -ItemType Directory -Force -Path $portableFullDir
           Copy-Item $binaryPath "$portableFullDir/KiroTokenManager.exe"
           New-Item -ItemType File -Path "$portableFullDir/.portable" -Force
           
-          # 从系统已安装的 Edge/WebView2 复制运行时文件
+          # 从系统复制 WebView2 Runtime
           Write-Host "Copying WebView2 Runtime from system..."
-          
           $edgePaths = @(
             "${env:ProgramFiles(x86)}\Microsoft\EdgeWebView\Application",
             "${env:ProgramFiles}\Microsoft\EdgeWebView\Application",
@@ -324,40 +310,12 @@ jobs:
           }
           
           if (-not $webview2Found) {
-            Write-Host "⚠ WebView2 not found in system, downloading standalone installer..."
+            Write-Host "⚠ WebView2 not found, downloading installer..."
             Invoke-WebRequest -Uri "https://go.microsoft.com/fwlink/?linkid=2124701" -OutFile "$portableFullDir/MicrosoftEdgeWebView2RuntimeInstallerX64.exe" -MaximumRedirection 10
-            Write-Host "✓ WebView2 Standalone Installer downloaded as fallback"
           }
           
           Compress-Archive -Path $portableFullDir -DestinationPath "portable/KiroTokenManager_${VERSION}_x64_portable_full.zip"
-          Write-Host "✓ Portable full version (with WebView2) created"
-
-      # Linux: 创建通用二进制包
-      - name: Create Linux portable (Linux)
-        if: matrix.platform == 'ubuntu-22.04'
-        run: |
-          BINARY_PATH="src-tauri/target/${{ matrix.target }}/release/kiro-token-manager"
-          VERSION="${{ steps.version.outputs.VERSION }}"
-          
-          if [ -f "$BINARY_PATH" ]; then
-            mkdir -p "linux-portable/KiroTokenManager_${VERSION}_linux_x64"
-            cp "$BINARY_PATH" "linux-portable/KiroTokenManager_${VERSION}_linux_x64/kiro-token-manager"
-            chmod +x "linux-portable/KiroTokenManager_${VERSION}_linux_x64/kiro-token-manager"
-            
-            # 创建启动脚本
-            cat > "linux-portable/KiroTokenManager_${VERSION}_linux_x64/run.sh" << 'EOF'
-#!/bin/bash
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-exec "$SCRIPT_DIR/kiro-token-manager" "$@"
-EOF
-            chmod +x "linux-portable/KiroTokenManager_${VERSION}_linux_x64/run.sh"
-            
-            # 打包为 tar.gz
-            cd linux-portable
-            tar -czvf "KiroTokenManager_${VERSION}_linux_x64.tar.gz" "KiroTokenManager_${VERSION}_linux_x64"
-            cd ..
-            echo "✓ Linux portable tar.gz created"
-          fi
+          Write-Host "✓ Portable full version created"
 
       # ========================================
       # 准备发布文件
@@ -379,23 +337,20 @@ EOF
             done
           fi
           
-          # macOS - DMG
+          # macOS - DMG（命名格式：KiroTokenManager_版本_架构.dmg）
           if [ "${{ matrix.platform }}" = "macos-latest" ]; then
             for f in src-tauri/target/${TARGET}/release/bundle/dmg/*.dmg; do
               [ -f "$f" ] && cp "$f" "release/KiroTokenManager_${VERSION}_${ARCH}.dmg"
             done
           fi
           
-          # Linux - DEB、RPM 和通用二进制
+          # Linux - DEB、RPM
           if [ "${{ matrix.platform }}" = "ubuntu-22.04" ]; then
             for f in src-tauri/target/${TARGET}/release/bundle/deb/*.deb; do
               [ -f "$f" ] && cp "$f" "release/KiroTokenManager_${VERSION}_${ARCH}.deb"
             done
             for f in src-tauri/target/${TARGET}/release/bundle/rpm/*.rpm; do
               [ -f "$f" ] && cp "$f" "release/KiroTokenManager_${VERSION}_x86_64.rpm"
-            done
-            for f in linux-portable/*.tar.gz; do
-              [ -f "$f" ] && cp "$f" "release/"
             done
           fi
           
