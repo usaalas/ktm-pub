@@ -139,7 +139,7 @@ jobs:
         if: matrix.platform == 'windows-latest'
         shell: pwsh
         run: |
-          $binaryPath = "src-tauri/target/${{ matrix.target }}/release/kiro-token-manager.exe"
+          $binaryPath = "src-tauri/target/${{ matrix.target }}/release/ktm.exe"
           
           if (Test-Path $binaryPath) {
             Write-Host "=== Binary Hardening (Windows) ===" -ForegroundColor Green
@@ -180,7 +180,7 @@ jobs:
       - name: Binary packing (macOS)
         if: matrix.platform == 'macos-latest'
         run: |
-          BINARY_PATH="src-tauri/target/${{ matrix.target }}/release/kiro-token-manager"
+          BINARY_PATH="src-tauri/target/${{ matrix.target }}/release/ktm"
           if [ -f "$BINARY_PATH" ]; then
             echo "=== Binary Hardening (macOS) ==="
             ORIGINAL_SIZE=$(stat -f%z "$BINARY_PATH" 2>/dev/null || stat -c%s "$BINARY_PATH")
@@ -219,7 +219,7 @@ jobs:
       - name: Binary packing (Linux)
         if: matrix.platform == 'ubuntu-22.04'
         run: |
-          BINARY_PATH="src-tauri/target/${{ matrix.target }}/release/kiro-token-manager"
+          BINARY_PATH="src-tauri/target/${{ matrix.target }}/release/ktm"
           
           if [ -f "$BINARY_PATH" ]; then
             echo "=== Binary Hardening (Linux) ==="
@@ -266,23 +266,23 @@ jobs:
         shell: pwsh
         run: |
           $VERSION = "${{ steps.version.outputs.VERSION }}"
-          $binaryPath = "src-tauri/target/${{ matrix.target }}/release/kiro-token-manager.exe"
+          $binaryPath = "src-tauri/target/${{ matrix.target }}/release/ktm.exe"
           
           # 创建便携版目录
           New-Item -ItemType Directory -Force -Path "portable"
           
           # 便携版（标准版，需要系统 WebView2）
-          $portableDir = "portable/KiroTokenManager_${VERSION}_x64_portable"
+          $portableDir = "portable/KTM_${VERSION}_x64_portable"
           New-Item -ItemType Directory -Force -Path $portableDir
-          Copy-Item $binaryPath "$portableDir/KiroTokenManager.exe"
+          Copy-Item $binaryPath "$portableDir/KTM.exe"
           New-Item -ItemType File -Path "$portableDir/.portable" -Force
-          Compress-Archive -Path $portableDir -DestinationPath "portable/KiroTokenManager_${VERSION}_x64_portable.zip"
+          Compress-Archive -Path $portableDir -DestinationPath "portable/KTM_${VERSION}_x64_portable.zip"
           Write-Host "✓ Portable version created"
           
           # 便携版完整版（内置 WebView2）
-          $portableFullDir = "portable/KiroTokenManager_${VERSION}_x64_portable_full"
+          $portableFullDir = "portable/KTM_${VERSION}_x64_portable_full"
           New-Item -ItemType Directory -Force -Path $portableFullDir
-          Copy-Item $binaryPath "$portableFullDir/KiroTokenManager.exe"
+          Copy-Item $binaryPath "$portableFullDir/KTM.exe"
           New-Item -ItemType File -Path "$portableFullDir/.portable" -Force
           
           # 从系统复制 WebView2 Runtime
@@ -314,7 +314,7 @@ jobs:
             Invoke-WebRequest -Uri "https://go.microsoft.com/fwlink/?linkid=2124701" -OutFile "$portableFullDir/MicrosoftEdgeWebView2RuntimeInstallerX64.exe" -MaximumRedirection 10
           }
           
-          Compress-Archive -Path $portableFullDir -DestinationPath "portable/KiroTokenManager_${VERSION}_x64_portable_full.zip"
+          Compress-Archive -Path $portableFullDir -DestinationPath "portable/KTM_${VERSION}_x64_portable_full.zip"
           Write-Host "✓ Portable full version created"
 
       # ========================================
@@ -337,20 +337,20 @@ jobs:
             done
           fi
           
-          # macOS - DMG（命名格式：KiroTokenManager_版本_架构.dmg）
+          # macOS - DMG（命名格式：KTM_版本_架构.dmg）
           if [ "${{ matrix.platform }}" = "macos-latest" ]; then
             for f in src-tauri/target/${TARGET}/release/bundle/dmg/*.dmg; do
-              [ -f "$f" ] && cp "$f" "release/KiroTokenManager_${VERSION}_${ARCH}.dmg"
+              [ -f "$f" ] && cp "$f" "release/KTM_${VERSION}_${ARCH}.dmg"
             done
           fi
           
           # Linux - DEB、RPM
           if [ "${{ matrix.platform }}" = "ubuntu-22.04" ]; then
             for f in src-tauri/target/${TARGET}/release/bundle/deb/*.deb; do
-              [ -f "$f" ] && cp "$f" "release/KiroTokenManager_${VERSION}_${ARCH}.deb"
+              [ -f "$f" ] && cp "$f" "release/KTM_${VERSION}_${ARCH}.deb"
             done
             for f in src-tauri/target/${TARGET}/release/bundle/rpm/*.rpm; do
-              [ -f "$f" ] && cp "$f" "release/KiroTokenManager_${VERSION}_x86_64.rpm"
+              [ -f "$f" ] && cp "$f" "release/KTM_${VERSION}_x86_64.rpm"
             done
           fi
           
