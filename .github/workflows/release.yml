@@ -8,6 +8,10 @@ name: Release Build (Multi-Platform)
 # - Windows: build-windows.bat（便携版 + 安装版）
 # - Linux: Dockerfile.build（DEB + RPM）
 # 
+# 渠道支持：
+# - default 渠道：tag 格式 v0.2.8
+# - goofish 渠道：tag 格式 goofish-v0.2.8
+# 
 # 集成保护措施：
 # - 前端代码混淆（控制流扁平化、字符串加密、死代码注入）
 # - Rust LTO 优化和符号剥离
@@ -18,8 +22,14 @@ name: Release Build (Multi-Platform)
 on:
   push:
     tags:
-      - 'v*'
+      - 'v*'           # default 渠道
+      - 'goofish-v*'   # goofish 渠道
   workflow_dispatch:
+    inputs:
+      channel:
+        description: '构建渠道 (default/goofish)'
+        required: false
+        default: 'default'
 
 permissions:
   contents: write
@@ -67,64 +77,56 @@ jobs:
         with:
           workspaces: './src-tauri -> target'
 
-      # Linux: 安装系统依赖（与 Dockerfile.build 一致）
       - name: Install Linux dependencies
         if: matrix.platform == 'ubuntu-22.04'
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libgtk-3-dev libxdo-dev libssl-dev
 
-      # ========================================
-      # 步骤 1: 安装依赖
-      # ========================================
       - name: Install dependencies
         run: npm ci
 
-      # ========================================
-      # 版本处理
-      # ========================================
-      - name: Get version from tag or package.json
+      - name: Determine channel and version
         id: version
         shell: bash
         run: |
-          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+          if [[ "${{ github.ref }}" == refs/tags/goofish-v* ]]; then
+            CHANNEL="goofish"
+            VERSION="${{ github.ref_name }}"
+            VERSION="${VERSION#goofish-v}"
+          elif [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            CHANNEL="default"
             VERSION="${{ github.ref_name }}"
             VERSION="${VERSION#v}"
-            echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
-            echo "Using tag version: $VERSION"
-            npm pkg set version="$VERSION"
           else
+            CHANNEL="${{ github.event.inputs.channel }}"
+            CHANNEL="${CHANNEL:-default}"
             VERSION=$(node -p "require('./package.json').version")
-            echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
-            echo "Using package.json version: $VERSION"
           fi
+          echo "CHANNEL=$CHANNEL" >> $GITHUB_OUTPUT
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "📦 Channel: $CHANNEL"
+          echo "📌 Version: $VERSION"
+          npm pkg set version="$VERSION"
 
-      # ========================================
-      # 步骤 2: 构建前端（含代码混淆）
-      # ========================================
-      - name: Build frontend (with obfuscation)
+      - name: Build frontend
+        env:
+          CHANNEL: ${{ steps.version.outputs.CHANNEL }}
         run: npm run build
 
-      # ========================================
-      # 步骤 3: 构建 Rust 后端
-      # ========================================
       - name: Build Rust backend
         shell: bash
+        env:
+          CHANNEL: ${{ steps.version.outputs.CHANNEL }}
         run: |
           cd src-tauri
           cargo build --release --target ${{ matrix.target }}
           cd ..
 
-      # ========================================
-      # 步骤 4: 二进制加壳处理（与本地脚本一致）
-      # ========================================
-
-      # Windows: 安装 UPX
       - name: Install UPX (Windows)
         if: matrix.platform == 'windows-latest'
         shell: pwsh
         run: |
-          Write-Host "=== Installing UPX ===" -ForegroundColor Green
           $upxVersion = "4.2.4"
           $upxUrl = "https://github.com/upx/upx/releases/download/v${upxVersion}/upx-${upxVersion}-win64.zip"
           Invoke-WebRequest -Uri $upxUrl -OutFile "upx.zip"
@@ -132,229 +134,141 @@ jobs:
           Move-Item "upx-temp/upx-${upxVersion}-win64/upx.exe" "upx.exe"
           Remove-Item "upx.zip"
           Remove-Item "upx-temp" -Recurse
-          Write-Host "✓ UPX installed"
 
-      # Windows: 加壳处理
       - name: Binary packing (Windows)
         if: matrix.platform == 'windows-latest'
         shell: pwsh
         run: |
           $binaryPath = "src-tauri/target/${{ matrix.target }}/release/kiro-token-manager.exe"
-          
           if (Test-Path $binaryPath) {
-            Write-Host "=== Binary Hardening (Windows) ===" -ForegroundColor Green
-            $originalSize = (Get-Item $binaryPath).Length
-            Write-Host "Original size: $originalSize bytes"
-            
-            # 1. UPX 压缩
-            Write-Host "Applying UPX compression..."
-            ./upx.exe --best --lzma $binaryPath
-            if ($LASTEXITCODE -eq 0) {
-              Write-Host "✓ UPX compression (--best --lzma)"
-            } else {
-              Write-Host "⚠ UPX compression skipped"
-            }
-            
-            # 2. 注入垃圾数据（256KB）
+            ./upx.exe --best --lzma $binaryPath 2>$null
             $junkData = New-Object byte[] 262144
             $rng = New-Object System.Security.Cryptography.RNGCryptoServiceProvider
             $rng.GetBytes($junkData)
             $fs = [System.IO.File]::Open($binaryPath, [System.IO.FileMode]::Append)
             $fs.Write($junkData, 0, $junkData.Length)
             $fs.Close()
-            Write-Host "✓ Junk data injection (256KB)"
-            
-            # 3. 修改时间戳
             $fakeDate = Get-Date "2020-01-01 00:00:00"
             (Get-Item $binaryPath).CreationTime = $fakeDate
             (Get-Item $binaryPath).LastWriteTime = $fakeDate
-            (Get-Item $binaryPath).LastAccessTime = $fakeDate
-            Write-Host "✓ Timestamp obfuscation"
-            
-            $packedSize = (Get-Item $binaryPath).Length
-            Write-Host "Packed size: $packedSize bytes"
-            Write-Host "=== Hardening Complete ===" -ForegroundColor Green
           }
 
-      # macOS: 加壳处理（与 build-macos-universal.sh 一致）
       - name: Binary packing (macOS)
         if: matrix.platform == 'macos-latest'
         run: |
           BINARY_PATH="src-tauri/target/${{ matrix.target }}/release/kiro-token-manager"
           if [ -f "$BINARY_PATH" ]; then
-            echo "=== Binary Hardening (macOS) ==="
-            ORIGINAL_SIZE=$(stat -f%z "$BINARY_PATH" 2>/dev/null || stat -c%s "$BINARY_PATH")
-            echo "Original size: $ORIGINAL_SIZE bytes"
-            
-            # 1. 符号剥离
             strip -x "$BINARY_PATH" 2>/dev/null || true
             strip -S "$BINARY_PATH" 2>/dev/null || true
-            echo "✓ Symbol stripping"
-            
-            # 2. 动态库路径混淆
-            DYLIBS=$(otool -L "$BINARY_PATH" | grep -v ":" | awk '{print $1}' | grep -v "^$" | grep -v "/System/" | grep -v "/usr/lib/" || true)
-            for dylib in $DYLIBS; do
-              RANDOM_NAME=$(openssl rand -hex 8)
-              install_name_tool -change "$dylib" "@executable_path/../Frameworks/lib${RANDOM_NAME}.dylib" "$BINARY_PATH" 2>/dev/null || true
-            done
-            echo "✓ Dynamic library path obfuscation"
-            
-            # 3. 垃圾数据注入（256KB）
             JUNK_FILE=$(mktemp)
             dd if=/dev/urandom of="$JUNK_FILE" bs=1024 count=256 2>/dev/null
             cat "$JUNK_FILE" >> "$BINARY_PATH"
             rm -f "$JUNK_FILE"
-            echo "✓ Junk data injection (256KB)"
-            
-            # 4. 时间戳混淆
             touch -t 200001010000 "$BINARY_PATH" 2>/dev/null || true
-            echo "✓ Timestamp obfuscation"
-            
-            PACKED_SIZE=$(stat -f%z "$BINARY_PATH" 2>/dev/null || stat -c%s "$BINARY_PATH")
-            echo "Packed size: $PACKED_SIZE bytes"
-            echo "=== Hardening Complete ==="
           fi
 
-      # Linux: 加壳处理
       - name: Binary packing (Linux)
         if: matrix.platform == 'ubuntu-22.04'
         run: |
           BINARY_PATH="src-tauri/target/${{ matrix.target }}/release/kiro-token-manager"
-          
           if [ -f "$BINARY_PATH" ]; then
-            echo "=== Binary Hardening (Linux) ==="
-            ORIGINAL_SIZE=$(stat -c%s "$BINARY_PATH")
-            echo "Original size: $ORIGINAL_SIZE bytes"
-            
-            # 1. 符号剥离
             strip --strip-all "$BINARY_PATH" 2>/dev/null || true
-            echo "✓ Symbol stripping"
-            
-            # 2. 垃圾数据注入（256KB）
             JUNK_FILE=$(mktemp)
             dd if=/dev/urandom of="$JUNK_FILE" bs=1024 count=256 2>/dev/null
             cat "$JUNK_FILE" >> "$BINARY_PATH"
             rm -f "$JUNK_FILE"
-            echo "✓ Junk data injection (256KB)"
-            
-            # 3. 时间戳混淆
             touch -t 200001010000 "$BINARY_PATH" 2>/dev/null || true
-            echo "✓ Timestamp obfuscation"
-            
-            PACKED_SIZE=$(stat -c%s "$BINARY_PATH")
-            echo "Packed size: $PACKED_SIZE bytes"
-            echo "=== Hardening Complete ==="
           fi
 
-      # ========================================
-      # 步骤 5: 打包 Tauri 应用
-      # ========================================
-
-      # macOS: 打包 DMG
       - name: Bundle Tauri app (macOS)
         if: matrix.platform == 'macos-latest'
         run: npm run tauri build -- --target ${{ matrix.target }} --bundles dmg
 
-      # Linux: 打包 DEB/RPM
       - name: Bundle Tauri app (Linux)
         if: matrix.platform == 'ubuntu-22.04'
         run: npm run tauri build -- --target ${{ matrix.target }} --bundles deb,rpm
 
-      # Windows: 创建便携版和安装版
       - name: Bundle Tauri app (Windows)
         if: matrix.platform == 'windows-latest'
         shell: pwsh
         run: |
           $VERSION = "${{ steps.version.outputs.VERSION }}"
+          $CHANNEL = "${{ steps.version.outputs.CHANNEL }}"
           $binaryPath = "src-tauri/target/${{ matrix.target }}/release/kiro-token-manager.exe"
+          $PREFIX = if ($CHANNEL -eq "default") { "" } else { "${CHANNEL}_" }
           
-          # 创建便携版目录
           New-Item -ItemType Directory -Force -Path "portable"
           
-          # 便携版（标准版，需要系统 WebView2）
-          $portableDir = "portable/KiroTokenManager_${VERSION}_x64_portable"
+          $portableDir = "portable/${PREFIX}KiroTokenManager_${VERSION}_x64_portable"
           New-Item -ItemType Directory -Force -Path $portableDir
           Copy-Item $binaryPath "$portableDir/KiroTokenManager.exe"
           New-Item -ItemType File -Path "$portableDir/.portable" -Force
-          Compress-Archive -Path $portableDir -DestinationPath "portable/KiroTokenManager_${VERSION}_x64_portable.zip"
-          Write-Host "✓ Portable version created"
+          Compress-Archive -Path $portableDir -DestinationPath "portable/${PREFIX}KiroTokenManager_${VERSION}_x64_portable.zip"
           
-          # 便携版完整版（内置 WebView2）
-          $portableFullDir = "portable/KiroTokenManager_${VERSION}_x64_portable_full"
+          $portableFullDir = "portable/${PREFIX}KiroTokenManager_${VERSION}_x64_portable_full"
           New-Item -ItemType Directory -Force -Path $portableFullDir
           Copy-Item $binaryPath "$portableFullDir/KiroTokenManager.exe"
           New-Item -ItemType File -Path "$portableFullDir/.portable" -Force
           
-          # 从系统复制 WebView2 Runtime
-          Write-Host "Copying WebView2 Runtime from system..."
           $edgePaths = @(
             "${env:ProgramFiles(x86)}\Microsoft\EdgeWebView\Application",
-            "${env:ProgramFiles}\Microsoft\EdgeWebView\Application",
-            "${env:ProgramFiles(x86)}\Microsoft\Edge\Application",
-            "${env:ProgramFiles}\Microsoft\Edge\Application"
+            "${env:ProgramFiles}\Microsoft\EdgeWebView\Application"
           )
-          
           $webview2Found = $false
           foreach ($basePath in $edgePaths) {
             if (Test-Path $basePath) {
               $versionDir = Get-ChildItem -Path $basePath -Directory | Where-Object { $_.Name -match '^\d+\.\d+\.\d+\.\d+$' } | Sort-Object Name -Descending | Select-Object -First 1
               if ($versionDir) {
-                Write-Host "Found WebView2 at: $($versionDir.FullName)"
                 New-Item -ItemType Directory -Force -Path "$portableFullDir/WebView2"
                 Copy-Item -Path "$($versionDir.FullName)\*" -Destination "$portableFullDir/WebView2" -Recurse -Force
                 $webview2Found = $true
-                Write-Host "✓ WebView2 Runtime copied (version: $($versionDir.Name))"
                 break
               }
             }
           }
-          
           if (-not $webview2Found) {
-            Write-Host "⚠ WebView2 not found, downloading installer..."
             Invoke-WebRequest -Uri "https://go.microsoft.com/fwlink/?linkid=2124701" -OutFile "$portableFullDir/MicrosoftEdgeWebView2RuntimeInstallerX64.exe" -MaximumRedirection 10
           }
-          
-          Compress-Archive -Path $portableFullDir -DestinationPath "portable/KiroTokenManager_${VERSION}_x64_portable_full.zip"
-          Write-Host "✓ Portable full version created"
+          Compress-Archive -Path $portableFullDir -DestinationPath "portable/${PREFIX}KiroTokenManager_${VERSION}_x64_portable_full.zip"
 
-      # ========================================
-      # 准备发布文件
-      # ========================================
       - name: Prepare release files
         shell: bash
         run: |
           mkdir -p release
           VERSION=${{ steps.version.outputs.VERSION }}
+          CHANNEL=${{ steps.version.outputs.CHANNEL }}
           TARGET=${{ matrix.target }}
           ARCH=${{ matrix.arch }}
           
-          echo "=== Preparing Release Files ==="
+          if [ "$CHANNEL" = "default" ]; then
+            PREFIX=""
+          else
+            PREFIX="${CHANNEL}_"
+          fi
           
-          # Windows - 便携版
+          echo "📦 Channel: $CHANNEL, Version: $VERSION, Prefix: $PREFIX"
+          
           if [ "${{ matrix.platform }}" = "windows-latest" ]; then
             for f in portable/*.zip; do
               [ -f "$f" ] && cp "$f" "release/"
             done
           fi
           
-          # macOS - DMG（命名格式：KiroTokenManager_版本_架构.dmg）
           if [ "${{ matrix.platform }}" = "macos-latest" ]; then
             for f in src-tauri/target/${TARGET}/release/bundle/dmg/*.dmg; do
-              [ -f "$f" ] && cp "$f" "release/KiroTokenManager_${VERSION}_${ARCH}.dmg"
+              [ -f "$f" ] && cp "$f" "release/${PREFIX}KiroTokenManager_${VERSION}_${ARCH}.dmg"
             done
           fi
           
-          # Linux - DEB、RPM
           if [ "${{ matrix.platform }}" = "ubuntu-22.04" ]; then
             for f in src-tauri/target/${TARGET}/release/bundle/deb/*.deb; do
-              [ -f "$f" ] && cp "$f" "release/KiroTokenManager_${VERSION}_${ARCH}.deb"
+              [ -f "$f" ] && cp "$f" "release/${PREFIX}KiroTokenManager_${VERSION}_${ARCH}.deb"
             done
             for f in src-tauri/target/${TARGET}/release/bundle/rpm/*.rpm; do
-              [ -f "$f" ] && cp "$f" "release/KiroTokenManager_${VERSION}_x86_64.rpm"
+              [ -f "$f" ] && cp "$f" "release/${PREFIX}KiroTokenManager_${VERSION}_x86_64.rpm"
             done
           fi
           
-          # 生成校验和
           cd release
           if [ "${{ matrix.platform }}" = "macos-latest" ]; then
             shasum -a 256 * > SHA256SUMS.txt 2>/dev/null || true
@@ -362,14 +276,12 @@ jobs:
             sha256sum * > SHA256SUMS.txt 2>/dev/null || true
           fi
           cd ..
-          
-          echo "=== Release Files ==="
           ls -lh release/
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: release-${{ matrix.target }}
+          name: release-${{ steps.version.outputs.CHANNEL }}-${{ matrix.target }}
           path: release/*
           retention-days: 30
 
