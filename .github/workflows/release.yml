@@ -216,33 +216,6 @@ jobs:
           Copy-Item $binaryPath "$portableDir/KiroTokenManager.exe"
           New-Item -ItemType File -Path "$portableDir/.portable" -Force
           Compress-Archive -Path $portableDir -DestinationPath "portable/${PREFIX}KiroTokenManager_${VERSION}_x64_portable.zip"
-          
-          # 创建完整便携版（含 WebView2）
-          $portableFullDir = "portable/${PREFIX}KiroTokenManager_${VERSION}_x64_portable_full"
-          New-Item -ItemType Directory -Force -Path $portableFullDir
-          Copy-Item $binaryPath "$portableFullDir/KiroTokenManager.exe"
-          New-Item -ItemType File -Path "$portableFullDir/.portable" -Force
-          
-          $edgePaths = @(
-            "${env:ProgramFiles(x86)}\Microsoft\EdgeWebView\Application",
-            "${env:ProgramFiles}\Microsoft\EdgeWebView\Application"
-          )
-          $webview2Found = $false
-          foreach ($basePath in $edgePaths) {
-            if (Test-Path $basePath) {
-              $versionDir = Get-ChildItem -Path $basePath -Directory | Where-Object { $_.Name -match '^\d+\.\d+\.\d+\.\d+$' } | Sort-Object Name -Descending | Select-Object -First 1
-              if ($versionDir) {
-                New-Item -ItemType Directory -Force -Path "$portableFullDir/WebView2"
-                Copy-Item -Path "$($versionDir.FullName)\*" -Destination "$portableFullDir/WebView2" -Recurse -Force
-                $webview2Found = $true
-                break
-              }
-            }
-          }
-          if (-not $webview2Found) {
-            Invoke-WebRequest -Uri "https://go.microsoft.com/fwlink/?linkid=2124701" -OutFile "$portableFullDir/MicrosoftEdgeWebView2RuntimeInstallerX64.exe" -MaximumRedirection 10
-          }
-          Compress-Archive -Path $portableFullDir -DestinationPath "portable/${PREFIX}KiroTokenManager_${VERSION}_x64_portable_full.zip"
 
       - name: Prepare release files
         shell: bash
