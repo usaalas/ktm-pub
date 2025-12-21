@@ -153,15 +153,21 @@ jobs:
 
       - name: Bundle Tauri app (macOS)
         if: matrix.platform == 'macos-latest'
+        env:
+          CHANNEL: ${{ steps.version.outputs.CHANNEL }}
         run: npm run tauri build -- --target ${{ matrix.target }} --bundles dmg
 
       - name: Bundle Tauri app (Linux)
         if: matrix.platform == 'ubuntu-22.04'
+        env:
+          CHANNEL: ${{ steps.version.outputs.CHANNEL }}
         run: npm run tauri build -- --target ${{ matrix.target }} --bundles deb,rpm
 
       - name: Bundle Tauri app (Windows)
         if: matrix.platform == 'windows-latest'
         shell: pwsh
+        env:
+          CHANNEL: ${{ steps.version.outputs.CHANNEL }}
         run: |
           # 使用 tauri build 生成包含嵌入前端资源的可执行文件
           npm run tauri build -- --target ${{ matrix.target }} --bundles nsis
