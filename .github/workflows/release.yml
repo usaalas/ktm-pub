@@ -114,7 +114,8 @@ jobs:
           CHANNEL: ${{ steps.version.outputs.CHANNEL }}
         run: npm run build
 
-      - name: Build Rust backend
+      - name: Build Rust backend (non-Windows)
+        if: matrix.platform != 'windows-latest'
         shell: bash
         env:
           CHANNEL: ${{ steps.version.outputs.CHANNEL }}
@@ -122,36 +123,6 @@ jobs:
           cd src-tauri
           cargo build --release --target ${{ matrix.target }}
           cd ..
-
-      - name: Install UPX (Windows)
-        if: matrix.platform == 'windows-latest'
-        shell: pwsh
-        run: |
-          $upxVersion = "4.2.4"
-          $upxUrl = "https://github.com/upx/upx/releases/download/v${upxVersion}/upx-${upxVersion}-win64.zip"
-          Invoke-WebRequest -Uri $upxUrl -OutFile "upx.zip"
-          Expand-Archive -Path "upx.zip" -DestinationPath "upx-temp" -Force
-          Move-Item "upx-temp/upx-${upxVersion}-win64/upx.exe" "upx.exe"
-          Remove-Item "upx.zip"
-          Remove-Item "upx-temp" -Recurse
-
-      - name: Binary packing (Windows)
-        if: matrix.platform == 'windows-latest'
-        shell: pwsh
-        run: |
-          $binaryPath = "src-tauri/target/${{ matrix.target }}/release/kiro-token-manager.exe"
-          if (Test-Path $binaryPath) {
-            ./upx.exe --best --lzma $binaryPath 2>$null
-            $junkData = New-Object byte[] 262144
-            $rng = New-Object System.Security.Cryptography.RNGCryptoServiceProvider
-            $rng.GetBytes($junkData)
-            $fs = [System.IO.File]::Open($binaryPath, [System.IO.FileMode]::Append)
-            $fs.Write($junkData, 0, $junkData.Length)
-            $fs.Close()
-            $fakeDate = Get-Date "2020-01-01 00:00:00"
-            (Get-Item $binaryPath).CreationTime = $fakeDate
-            (Get-Item $binaryPath).LastWriteTime = $fakeDate
-          }
 
       - name: Binary packing (macOS)
         if: matrix.platform == 'macos-latest'
@@ -192,6 +163,46 @@ jobs:
         if: matrix.platform == 'windows-latest'
         shell: pwsh
         run: |
+          # 使用 tauri build 生成包含嵌入前端资源的可执行文件
+          npm run tauri build -- --target ${{ matrix.target }} --bundles nsis
+
+      - name: Install UPX (Windows)
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          $upxVersion = "4.2.4"
+          $upxUrl = "https://github.com/upx/upx/releases/download/v${upxVersion}/upx-${upxVersion}-win64.zip"
+          Invoke-WebRequest -Uri $upxUrl -OutFile "upx.zip"
+          Expand-Archive -Path "upx.zip" -DestinationPath "upx-temp" -Force
+          Move-Item "upx-temp/upx-${upxVersion}-win64/upx.exe" "upx.exe"
+          Remove-Item "upx.zip"
+          Remove-Item "upx-temp" -Recurse
+
+      - name: Binary packing (Windows)
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          $binaryPath = "src-tauri/target/${{ matrix.target }}/release/kiro-token-manager.exe"
+          if (Test-Path $binaryPath) {
+            # UPX 压缩（tauri build 生成的 exe 可能无法压缩，忽略错误）
+            ./upx.exe --best --lzma $binaryPath 2>$null
+            # 添加垃圾数据混淆
+            $junkData = New-Object byte[] 262144
+            $rng = New-Object System.Security.Cryptography.RNGCryptoServiceProvider
+            $rng.GetBytes($junkData)
+            $fs = [System.IO.File]::Open($binaryPath, [System.IO.FileMode]::Append)
+            $fs.Write($junkData, 0, $junkData.Length)
+            $fs.Close()
+            # 修改时间戳
+            $fakeDate = Get-Date "2020-01-01 00:00:00"
+            (Get-Item $binaryPath).CreationTime = $fakeDate
+            (Get-Item $binaryPath).LastWriteTime = $fakeDate
+          }
+
+      - name: Create Windows portable packages
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
           $VERSION = "${{ steps.version.outputs.VERSION }}"
           $CHANNEL = "${{ steps.version.outputs.CHANNEL }}"
           $binaryPath = "src-tauri/target/${{ matrix.target }}/release/kiro-token-manager.exe"
@@ -199,12 +210,14 @@ jobs:
           
           New-Item -ItemType Directory -Force -Path "portable"
           
+          # 创建便携版（不含 WebView2）
           $portableDir = "portable/${PREFIX}KiroTokenManager_${VERSION}_x64_portable"
           New-Item -ItemType Directory -Force -Path $portableDir
           Copy-Item $binaryPath "$portableDir/KiroTokenManager.exe"
           New-Item -ItemType File -Path "$portableDir/.portable" -Force
           Compress-Archive -Path $portableDir -DestinationPath "portable/${PREFIX}KiroTokenManager_${VERSION}_x64_portable.zip"
           
+          # 创建完整便携版（含 WebView2）
           $portableFullDir = "portable/${PREFIX}KiroTokenManager_${VERSION}_x64_portable_full"
           New-Item -ItemType Directory -Force -Path $portableFullDir
           Copy-Item $binaryPath "$portableFullDir/KiroTokenManager.exe"
