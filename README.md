@@ -5,6 +5,9 @@
 
 <img src="images/Q3.png" width="200" height="250" alt="QQ群二维码">
 
+### 主界面预览
+Token 列表管理，支持批量导入、一键切换、用量查询等操作。
+
 ![主界面](images/screenshots/main.png)
 
 ## 功能特性
