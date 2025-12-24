@@ -25,7 +25,6 @@
 
 ### Windows
 - `KiroTokenManager_版本_x64_portable.zip` - 便携版（需要系统已安装 WebView2）
-- `KiroTokenManager_版本_x64_portable_full.zip` - 便携版完整版（内置 WebView2）
 
 ### macOS
 - `KiroTokenManager_版本_aarch64.dmg` - Apple Silicon (M1/M2/M3/M4)
