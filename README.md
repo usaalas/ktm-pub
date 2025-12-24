@@ -61,12 +61,27 @@ A: 点击刷新按钮，应用会自动刷新 Token。
 
 ## 软件界面截图
 
+### 1. 设置页面
+配置 Token 存储路径、自动刷新间隔、深色模式等选项。
+
 ![设置](images/screenshots/settings.png)
+
+### 2. 代理设置
+配置 K-Proxy 代理服务器，支持动态设备 ID 功能。
 
 ![代理](images/screenshots/proxy.png)
 
+### 3. 网络诊断
+检测网络连通性，排查连接问题。
+
 ![网络](images/screenshots/net.png)
 
+### 4. 日志查看
+查看应用运行日志，便于问题排查。
+
 ![日志](images/screenshots/log.png)
+
+### 5. 关于页面
+查看版本信息和更新日志。
 
 ![关于](images/screenshots/about.png)
