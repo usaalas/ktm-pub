@@ -5,6 +5,8 @@
 
 <img src="images/Q3.png" width="200" height="250" alt="QQ群二维码">
 
+![主界面](images/screenshots/main.png)
+
 ## 功能特性
 
 - **批量管理** - 支持导入、导出和管理多个 Token
@@ -56,3 +58,16 @@ A: 点击刷新按钮，应用会自动刷新 Token。
 - Windows 10+ (x64)
 - macOS 10.15+
 - Linux (x64)
+
+
+## 软件界面截图
+
+![设置](images/screenshots/settings.png)
+
+![代理](images/screenshots/proxy.png)
+
+![网络](images/screenshots/net.png)
+
+![日志](images/screenshots/log.png)
+
+![关于](images/screenshots/about.png)
