@@ -2,6 +2,8 @@
 
 一款 Kiro Token 管理工具，支持一键切号、动态无感修改设备 ID、批量刷新 Token、用量查询等功能。
 
+仓库已迁移至 https://github.com/usaalas/kiro-token-manager
+
 欢迎加QQ 群交流(287135760)
 
 <img src="images/Q3.png" width="200" height="250" alt="QQ群二维码">
